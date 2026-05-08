@@ -1,0 +1,171 @@
+#1 i 2
+
+DECLARE
+    v_numer_max departments.department_id%TYPE;
+    v_nowa_nazwa departments.department_name%TYPE := 'EDUCATION';
+BEGIN
+    SELECT MAX(department_id) INTO v_numer_max FROM departments;
+    
+    INSERT INTO departments (department_id, department_name, location_id)
+    VALUES (v_numer_max + 10, v_nowa_nazwa, 3000);
+    
+    DBMS_OUTPUT.PUT_LINE('Dodano departament: ' || v_nowa_nazwa || ' z ID: ' || (v_numer_max + 10));
+    COMMIT;
+END;
+
+#3
+
+CREATE TABLE nowa (liczba VARCHAR2(10));
+
+BEGIN
+    FOR i IN 1..10 LOOP
+        IF i = 4 OR i = 6 THEN
+            CONTINUE; 
+        END IF;
+        INSERT INTO nowa (liczba) VALUES (TO_CHAR(i));
+    END LOOP;
+    COMMIT;
+END;
+
+#4
+
+DECLARE
+    v_kraj countries%ROWTYPE;
+BEGIN
+    SELECT * INTO v_kraj FROM countries WHERE country_id = 'CA';
+    
+    DBMS_OUTPUT.PUT_LINE('Kraj: ' || v_kraj.country_name || ', Region ID: ' || v_kraj.region_id);
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('Nie znaleziono kraju o ID: CA');
+END;
+
+#5
+
+DECLARE
+    CURSOR c_podwyzki IS 
+        SELECT salary, last_name FROM employees WHERE department_id = 50;
+BEGIN
+    FOR r IN c_podwyzki LOOP
+        IF r.salary > 3100 THEN
+            DBMS_OUTPUT.PUT_LINE(r.last_name || ': nie dawać podwyżki');
+        ELSE
+            DBMS_OUTPUT.PUT_LINE(r.last_name || ': dać podwyżkę');
+        END IF;
+    END LOOP;
+END;
+
+#6a i b
+
+DECLARE
+    CURSOR c_params(p_min NUMBER, p_max NUMBER, p_name_part VARCHAR2) IS
+        SELECT first_name, last_name, salary 
+        FROM employees 
+        WHERE salary BETWEEN p_min AND p_max 
+        AND UPPER(first_name) LIKE '%' || UPPER(p_name_part) || '%';
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('--- Wyniki dla 1000-5000 i litery A ---');
+    FOR r IN c_params(1000, 5000, 'a') LOOP
+        DBMS_OUTPUT.PUT_LINE(r.first_name || ' ' || r.last_name || ' (' || r.salary || ')');
+    END LOOP;
+    FOR r IN c_params(5000, 20000, 'u') LOOP
+        DBMS_OUTPUT.PUT_LINE(r.first_name || ' ' || r.last_name || ' (' || r.salary || ')');
+    END LOOP;
+END;
+
+#9a
+
+CREATE OR REPLACE PROCEDURE add_job(p_job_id VARCHAR2, p_job_title VARCHAR2) IS
+BEGIN
+    INSERT INTO jobs (job_id, job_title) VALUES (p_job_id, p_job_title);
+    DBMS_OUTPUT.PUT_LINE('Dodano zawód: ' || p_job_title);
+    COMMIT;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Wystąpił błąd podczas dodawania: ' || SQLERRM);
+END;
+
+
+#9b
+
+CREATE OR REPLACE PROCEDURE update_job_title(p_job_id VARCHAR2, p_new_title VARCHAR2) IS
+    e_no_job_updated EXCEPTION;
+BEGIN
+    UPDATE jobs SET job_title = p_new_title WHERE job_id = p_job_id;
+    
+    IF SQL%NOTFOUND THEN
+        RAISE e_no_job_updated;
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('Zaktualizowano tytuł dla: ' || p_job_id);
+    COMMIT;
+EXCEPTION
+    WHEN e_no_job_updated THEN
+        DBMS_OUTPUT.PUT_LINE('Błąd: Nie znaleziono zawodu o ID ' || p_job_id || ' do zmiany.');
+END;
+
+
+
+#9c
+
+CREATE OR REPLACE PROCEDURE delete_job(p_job_id VARCHAR2) IS
+    e_no_job_deleted EXCEPTION;
+BEGIN
+    DELETE FROM jobs WHERE job_id = p_job_id;
+    
+    IF SQL%NOTFOUND THEN
+        RAISE e_no_job_deleted;
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('Usunięto zawód: ' || p_job_id);
+    COMMIT;
+EXCEPTION
+    WHEN e_no_job_deleted THEN
+        DBMS_OUTPUT.PUT_LINE('Błąd: Nie znaleziono zawodu o ID ' || p_job_id || ' do usunięcia.');
+END;
+
+#9d
+
+CREATE OR REPLACE PROCEDURE get_emp_salary_name(
+    p_emp_id IN NUMBER, 
+    p_salary OUT NUMBER, 
+    p_last_name OUT VARCHAR2
+) IS
+BEGIN
+    SELECT salary, last_name INTO p_salary, p_last_name 
+    FROM employees 
+    WHERE employee_id = p_emp_id;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        p_salary := 0;
+        p_last_name := 'NIE ZNALEZIONO';
+END;
+
+#9e
+
+CREATE OR REPLACE PROCEDURE add_employee_safe(
+    p_last_name VARCHAR2,
+    p_email VARCHAR2,
+    p_job_id VARCHAR2,
+    p_salary NUMBER DEFAULT 2100 -- Wartość domyślna
+) IS
+    e_salary_limit EXCEPTION;
+BEGIN
+    -- Walidacja pensji
+    IF p_salary > 20000 THEN
+        RAISE e_salary_limit;
+    END IF;
+
+    INSERT INTO employees (employee_id, last_name, email, hire_date, job_id, salary)
+    VALUES (employees_seq.NEXTVAL, p_last_name, p_email, SYSDATE, p_job_id, p_salary);
+    
+    DBMS_OUTPUT.PUT_LINE('Pracownik dodany pomyślnie.');
+    COMMIT;
+EXCEPTION
+    WHEN e_salary_limit THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Przekroczono limit wynagrodzenia (max 20000)!');
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Błąd systemowy: ' || SQLERRM);
+END;
+
+
