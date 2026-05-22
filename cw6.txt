@@ -1,0 +1,443 @@
+#1
+
+CREATE OR REPLACE FUNCTION get_job_name(p_job_id IN VARCHAR2)
+RETURN VARCHAR2
+IS
+    v_job_title VARCHAR2(35);
+BEGIN
+    SELECT job_title
+    INTO v_job_title
+    FROM jobs
+    WHERE job_id = p_job_id;
+
+    RETURN v_job_title;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Praca o podanym ID ("' || p_job_id || '") nie istnieje.');
+END;
+
+#2
+
+CREATE OR REPLACE FUNCTION get_annual_salary(p_employee_id IN NUMBER)
+RETURN NUMBER
+IS
+    v_salary     NUMBER;
+    v_commission NUMBER;
+BEGIN
+    SELECT salary, NVL(commission_pct, 0)
+    INTO v_salary, v_commission
+    FROM employees
+    WHERE employee_id = p_employee_id;
+
+    RETURN (v_salary * 12) + (v_salary * v_commission);
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Pracownik o podanym ID (' || p_employee_id || ') nie istnieje.');
+END;
+
+#3
+
+CREATE OR REPLACE FUNCTION format_phone_with_area_code(p_phone IN VARCHAR2)
+RETURN VARCHAR2
+IS
+    v_dot_pos NUMBER;
+BEGIN
+    v_dot_pos := INSTR(p_phone, '.');
+
+    IF v_dot_pos = 0 THEN
+        RETURN '(' || p_phone || ')';
+    END IF;
+
+    RETURN '(' || SUBSTR(p_phone, 1, v_dot_pos - 1) || ')' || SUBSTR(p_phone, v_dot_pos);
+END;
+
+#4
+
+CREATE OR REPLACE FUNCTION format_first_last_upper(p_text IN VARCHAR2)
+RETURN VARCHAR2
+IS
+    v_len    NUMBER;
+    v_result VARCHAR2(4000);
+BEGIN
+    v_len := LENGTH(p_text);
+
+    IF v_len IS NULL OR v_len = 0 THEN
+        RETURN p_text;
+    ELSIF v_len = 1 THEN
+        RETURN UPPER(p_text);
+    ELSIF v_len = 2 THEN
+        RETURN UPPER(SUBSTR(p_text, 1, 1)) || UPPER(SUBSTR(p_text, 2, 1));
+    ELSE
+        v_result :=
+            UPPER(SUBSTR(p_text, 1, 1)) ||
+            LOWER(SUBSTR(p_text, 2, v_len - 2)) ||
+            UPPER(SUBSTR(p_text, v_len, 1));
+        RETURN v_result;
+    END IF;
+END;
+
+#5
+
+CREATE OR REPLACE FUNCTION pesel_to_birthdate(p_pesel IN VARCHAR2)
+RETURN VARCHAR2
+IS
+    v_yy    NUMBER;
+    v_mm    NUMBER;
+    v_dd    NUMBER;
+    v_year  NUMBER;
+    v_month NUMBER;
+BEGIN
+    IF LENGTH(p_pesel) <> 11 THEN
+        RAISE_APPLICATION_ERROR(-20005, 'Podany PESEL ma nieprawidłową długość.');
+    END IF;
+
+    v_yy := TO_NUMBER(SUBSTR(p_pesel, 1, 2));
+    v_mm := TO_NUMBER(SUBSTR(p_pesel, 3, 2));
+    v_dd := TO_NUMBER(SUBSTR(p_pesel, 5, 2));
+
+    IF v_mm BETWEEN 1 AND 12 THEN
+        v_year := 1900 + v_yy; v_month := v_mm;
+    ELSIF v_mm BETWEEN 21 AND 32 THEN
+        v_year := 2000 + v_yy; v_month := v_mm - 20;
+    ELSIF v_mm BETWEEN 41 AND 52 THEN
+        v_year := 2100 + v_yy; v_month := v_mm - 40;
+    ELSIF v_mm BETWEEN 61 AND 72 THEN
+        v_year := 2200 + v_yy; v_month := v_mm - 60;
+    ELSIF v_mm BETWEEN 81 AND 92 THEN
+        v_year := 1800 + v_yy; v_month := v_mm - 80;
+    ELSE
+        RAISE_APPLICATION_ERROR(-20005, 'Nieprawidłowy miesiąc w numerze PESEL.');
+    END IF;
+
+    RETURN TO_CHAR(v_year, 'FM0000') || '-' ||
+           LPAD(TO_CHAR(v_month), 2, '0') || '-' ||
+           LPAD(TO_CHAR(v_dd), 2, '0');
+END;
+
+#6
+
+CREATE OR REPLACE FUNCTION get_country_stats(p_country_name IN VARCHAR2)
+RETURN t_country_stats
+IS
+    v_country_id VARCHAR2(2);
+    v_emp_count  NUMBER;
+    v_dept_count NUMBER;
+BEGIN
+    SELECT country_id
+    INTO v_country_id
+    FROM countries
+    WHERE UPPER(country_name) = UPPER(p_country_name);
+
+    SELECT COUNT(DISTINCT e.employee_id),
+           COUNT(DISTINCT d.department_id)
+    INTO v_emp_count, v_dept_count
+    FROM departments d
+    LEFT JOIN employees e ON d.department_id = e.department_id
+    WHERE d.location_id IN (
+        SELECT location_id FROM locations WHERE country_id = v_country_id
+    );
+
+    RETURN t_country_stats(v_emp_count, v_dept_count);
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20006, 'Kraj "' || p_country_name || '" nie istnieje w bazie.');
+END;
+
+# wyzw 1
+
+CREATE TABLE archiwum_departamentow (
+    id              NUMBER PRIMARY KEY,
+    nazwa           VARCHAR2(100),
+    data_zamkniecia DATE,
+    ostatni_manager VARCHAR2(100)
+)
+
+CREATE OR REPLACE TRIGGER trg_archive_department
+AFTER DELETE ON departments
+FOR EACH ROW
+DECLARE
+    v_manager_name VARCHAR2(100);
+BEGIN
+    IF :OLD.manager_id IS NOT NULL THEN
+        BEGIN
+            SELECT first_name || ' ' || last_name
+            INTO v_manager_name
+            FROM employees
+            WHERE employee_id = :OLD.manager_id;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                v_manager_name := 'Nieznany manager';
+        END;
+    ELSE
+        v_manager_name := 'Brak managera';
+    END IF;
+
+    INSERT INTO archiwum_departamentow (id, nazwa, data_zamkniecia, ostatni_manager)
+    VALUES (archiwum_dept_seq.NEXTVAL, :OLD.department_name, SYSDATE, v_manager_name);
+END;
+
+-- TEST:
+INSERT INTO departments VALUES (999, 'Testowy', NULL, NULL);
+DELETE FROM departments WHERE department_id = 999;
+SELECT * FROM archiwum_departamentow;
+
+# wyzw 2
+
+CREATE TABLE zlodziej (
+    id          NUMBER PRIMARY KEY,
+    uzytkownik  VARCHAR2(100),
+    czas_zmiany TIMESTAMP
+)
+
+CREATE OR REPLACE TRIGGER trg_salary_check
+BEFORE INSERT OR UPDATE OF salary ON employees
+FOR EACH ROW
+BEGIN
+    IF :NEW.salary < 2000 OR :NEW.salary > 26000 THEN
+        INSERT INTO zlodziej (id, uzytkownik, czas_zmiany)
+        VALUES (zlodziej_seq.NEXTVAL, USER, SYSTIMESTAMP);
+
+        RAISE_APPLICATION_ERROR(-20003,
+            'Wynagrodzenie ' || :NEW.salary || ' jest poza przedziałem (2000 - 26000).');
+    END IF;
+END;
+
+-- TEST:
+UPDATE employees SET salary = 500 WHERE employee_id = 100;
+SELECT * FROM zlodziej;
+UPDATE employees SET salary = 17000 WHERE employee_id = 100;
+
+# wyzw 3
+
+CREATE OR REPLACE TRIGGER trg_employees_auto_id
+BEFORE INSERT ON employees
+FOR EACH ROW
+BEGIN
+    IF :NEW.employee_id IS NULL THEN
+        :NEW.employee_id := employees_seq.NEXTVAL;
+    END IF;
+END;
+
+-- TEST:
+INSERT INTO employees (first_name, last_name, email, hire_date, job_id, salary)
+VALUES ('Jan', 'Kowalski', 'JKOWALSKI', SYSDATE, 'IT_PROG', 5000);
+SELECT employee_id, first_name, last_name FROM employees WHERE last_name = 'Kowalski';
+
+# wyzw 4
+
+CREATE OR REPLACE TRIGGER trg_no_dml_job_grades
+BEFORE INSERT OR UPDATE OR DELETE ON job_grades
+BEGIN
+    RAISE_APPLICATION_ERROR(-20004,
+        'Operacje DML (INSERT, UPDATE, DELETE) na tabeli JOB_GRADES są zabronione!');
+END;
+
+TEST:
+INSERT INTO job_grades VALUES ('Z', 1, 99999);
+
+# wyzw 5
+
+CREATE OR REPLACE TRIGGER trg_keep_salary_range
+BEFORE UPDATE OF min_salary, max_salary ON jobs
+FOR EACH ROW
+BEGIN
+    :NEW.min_salary := :OLD.min_salary;
+    :NEW.max_salary := :OLD.max_salary;
+END;
+
+TEST:
+UPDATE jobs SET min_salary = 1, max_salary = 999999 WHERE job_id = 'IT_PROG';
+SELECT min_salary, max_salary FROM jobs WHERE job_id = 'IT_PROG';
+
+# pak 1
+
+CREATE OR REPLACE PACKAGE pkg_funkcje AS
+    FUNCTION get_job_name(p_job_id IN VARCHAR2) RETURN VARCHAR2;
+    FUNCTION get_annual_salary(p_employee_id IN NUMBER) RETURN NUMBER;
+    FUNCTION format_phone_with_area_code(p_phone IN VARCHAR2) RETURN VARCHAR2;
+    FUNCTION format_first_last_upper(p_text IN VARCHAR2) RETURN VARCHAR2;
+    FUNCTION pesel_to_birthdate(p_pesel IN VARCHAR2) RETURN VARCHAR2;
+    FUNCTION get_country_stats(p_country_name IN VARCHAR2) RETURN t_country_stats;
+END pkg_funkcje;
+
+CREATE OR REPLACE PACKAGE BODY pkg_funkcje AS
+
+    FUNCTION get_job_name(p_job_id IN VARCHAR2) RETURN VARCHAR2 IS
+        v_job_title VARCHAR2(35);
+    BEGIN
+        SELECT job_title INTO v_job_title FROM jobs WHERE job_id = p_job_id;
+        RETURN v_job_title;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20001, 'Praca o ID "' || p_job_id || '" nie istnieje.');
+    END;
+
+    FUNCTION get_annual_salary(p_employee_id IN NUMBER) RETURN NUMBER IS
+        v_salary     NUMBER;
+        v_commission NUMBER;
+    BEGIN
+        SELECT salary, NVL(commission_pct, 0) INTO v_salary, v_commission
+        FROM employees WHERE employee_id = p_employee_id;
+        RETURN (v_salary * 12) + (v_salary * v_commission);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Pracownik o ID ' || p_employee_id || ' nie istnieje.');
+    END;
+
+    FUNCTION format_phone_with_area_code(p_phone IN VARCHAR2) RETURN VARCHAR2 IS
+        v_dot_pos NUMBER;
+    BEGIN
+        v_dot_pos := INSTR(p_phone, '.');
+        IF v_dot_pos = 0 THEN RETURN '(' || p_phone || ')'; END IF;
+        RETURN '(' || SUBSTR(p_phone, 1, v_dot_pos - 1) || ')' || SUBSTR(p_phone, v_dot_pos);
+    END;
+
+    FUNCTION format_first_last_upper(p_text IN VARCHAR2) RETURN VARCHAR2 IS
+        v_len NUMBER := LENGTH(p_text);
+    BEGIN
+        IF v_len IS NULL OR v_len = 0 THEN RETURN p_text;
+        ELSIF v_len = 1 THEN RETURN UPPER(p_text);
+        ELSIF v_len = 2 THEN RETURN UPPER(SUBSTR(p_text,1,1)) || UPPER(SUBSTR(p_text,2,1));
+        ELSE
+            RETURN UPPER(SUBSTR(p_text,1,1)) || LOWER(SUBSTR(p_text,2,v_len-2)) || UPPER(SUBSTR(p_text,v_len,1));
+        END IF;
+    END;
+
+    FUNCTION pesel_to_birthdate(p_pesel IN VARCHAR2) RETURN VARCHAR2 IS
+        v_yy NUMBER; v_mm NUMBER; v_dd NUMBER;
+        v_year NUMBER; v_month NUMBER;
+    BEGIN
+        IF LENGTH(p_pesel) <> 11 THEN
+            RAISE_APPLICATION_ERROR(-20005, 'Nieprawidłowa długość PESEL.');
+        END IF;
+        v_yy := TO_NUMBER(SUBSTR(p_pesel,1,2));
+        v_mm := TO_NUMBER(SUBSTR(p_pesel,3,2));
+        v_dd := TO_NUMBER(SUBSTR(p_pesel,5,2));
+        IF    v_mm BETWEEN 1  AND 12 THEN v_year := 1900+v_yy; v_month := v_mm;
+        ELSIF v_mm BETWEEN 21 AND 32 THEN v_year := 2000+v_yy; v_month := v_mm-20;
+        ELSIF v_mm BETWEEN 41 AND 52 THEN v_year := 2100+v_yy; v_month := v_mm-40;
+        ELSIF v_mm BETWEEN 61 AND 72 THEN v_year := 2200+v_yy; v_month := v_mm-60;
+        ELSIF v_mm BETWEEN 81 AND 92 THEN v_year := 1800+v_yy; v_month := v_mm-80;
+        ELSE RAISE_APPLICATION_ERROR(-20005, 'Nieprawidłowy miesiąc w PESEL.');
+        END IF;
+        RETURN TO_CHAR(v_year,'FM0000')||'-'||LPAD(v_month,2,'0')||'-'||LPAD(v_dd,2,'0');
+    END;
+
+    FUNCTION get_country_stats(p_country_name IN VARCHAR2) RETURN t_country_stats IS
+        v_country_id VARCHAR2(2);
+        v_emp_count NUMBER; v_dept_count NUMBER;
+    BEGIN
+        SELECT country_id INTO v_country_id FROM countries
+        WHERE UPPER(country_name) = UPPER(p_country_name);
+
+        SELECT COUNT(DISTINCT e.employee_id), COUNT(DISTINCT d.department_id)
+        INTO v_emp_count, v_dept_count
+        FROM departments d
+        LEFT JOIN employees e ON d.department_id = e.department_id
+        WHERE d.location_id IN (
+            SELECT location_id FROM locations WHERE country_id = v_country_id
+        );
+        RETURN t_country_stats(v_emp_count, v_dept_count);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20006, 'Kraj "' || p_country_name || '" nie istnieje.');
+    END;
+
+END pkg_funkcje;
+
+# pak 2
+
+CREATE OR REPLACE PACKAGE pkg_regions AS
+    PROCEDURE add_region(p_region_id IN NUMBER, p_region_name IN VARCHAR2);
+    PROCEDURE get_region_by_id(p_region_id IN NUMBER, p_cursor OUT SYS_REFCURSOR);
+    PROCEDURE get_regions_by_name(p_name IN VARCHAR2, p_cursor OUT SYS_REFCURSOR);
+    PROCEDURE get_all_regions(p_cursor OUT SYS_REFCURSOR);
+    PROCEDURE update_region(p_region_id IN NUMBER, p_region_name IN VARCHAR2);
+    PROCEDURE delete_region(p_region_id IN NUMBER);
+END pkg_regions;
+
+CREATE OR REPLACE PACKAGE BODY pkg_funkcje AS
+
+    FUNCTION get_job_name(p_job_id IN VARCHAR2) RETURN VARCHAR2 IS
+        v_job_title VARCHAR2(35);
+    BEGIN
+        SELECT job_title INTO v_job_title FROM jobs WHERE job_id = p_job_id;
+        RETURN v_job_title;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20001, 'Praca o ID "' || p_job_id || '" nie istnieje.');
+    END;
+
+    FUNCTION get_annual_salary(p_employee_id IN NUMBER) RETURN NUMBER IS
+        v_salary     NUMBER;
+        v_commission NUMBER;
+    BEGIN
+        SELECT salary, NVL(commission_pct, 0) INTO v_salary, v_commission
+        FROM employees WHERE employee_id = p_employee_id;
+        RETURN (v_salary * 12) + (v_salary * v_commission);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20002, 'Pracownik o ID ' || p_employee_id || ' nie istnieje.');
+    END;
+
+    FUNCTION format_phone_with_area_code(p_phone IN VARCHAR2) RETURN VARCHAR2 IS
+        v_dot_pos NUMBER;
+    BEGIN
+        v_dot_pos := INSTR(p_phone, '.');
+        IF v_dot_pos = 0 THEN RETURN '(' || p_phone || ')'; END IF;
+        RETURN '(' || SUBSTR(p_phone, 1, v_dot_pos - 1) || ')' || SUBSTR(p_phone, v_dot_pos);
+    END;
+
+    FUNCTION format_first_last_upper(p_text IN VARCHAR2) RETURN VARCHAR2 IS
+        v_len NUMBER := LENGTH(p_text);
+    BEGIN
+        IF v_len IS NULL OR v_len = 0 THEN RETURN p_text;
+        ELSIF v_len = 1 THEN RETURN UPPER(p_text);
+        ELSIF v_len = 2 THEN RETURN UPPER(SUBSTR(p_text,1,1)) || UPPER(SUBSTR(p_text,2,1));
+        ELSE
+            RETURN UPPER(SUBSTR(p_text,1,1)) || LOWER(SUBSTR(p_text,2,v_len-2)) || UPPER(SUBSTR(p_text,v_len,1));
+        END IF;
+    END;
+
+    FUNCTION pesel_to_birthdate(p_pesel IN VARCHAR2) RETURN VARCHAR2 IS
+        v_yy NUMBER; v_mm NUMBER; v_dd NUMBER;
+        v_year NUMBER; v_month NUMBER;
+    BEGIN
+        IF LENGTH(p_pesel) <> 11 THEN
+            RAISE_APPLICATION_ERROR(-20005, 'Nieprawidłowa długość PESEL.');
+        END IF;
+        v_yy := TO_NUMBER(SUBSTR(p_pesel,1,2));
+        v_mm := TO_NUMBER(SUBSTR(p_pesel,3,2));
+        v_dd := TO_NUMBER(SUBSTR(p_pesel,5,2));
+        IF    v_mm BETWEEN 1  AND 12 THEN v_year := 1900+v_yy; v_month := v_mm;
+        ELSIF v_mm BETWEEN 21 AND 32 THEN v_year := 2000+v_yy; v_month := v_mm-20;
+        ELSIF v_mm BETWEEN 41 AND 52 THEN v_year := 2100+v_yy; v_month := v_mm-40;
+        ELSIF v_mm BETWEEN 61 AND 72 THEN v_year := 2200+v_yy; v_month := v_mm-60;
+        ELSIF v_mm BETWEEN 81 AND 92 THEN v_year := 1800+v_yy; v_month := v_mm-80;
+        ELSE RAISE_APPLICATION_ERROR(-20005, 'Nieprawidłowy miesiąc w PESEL.');
+        END IF;
+        RETURN TO_CHAR(v_year,'FM0000')||'-'||LPAD(v_month,2,'0')||'-'||LPAD(v_dd,2,'0');
+    END;
+
+    FUNCTION get_country_stats(p_country_name IN VARCHAR2) RETURN t_country_stats IS
+        v_country_id VARCHAR2(2);
+        v_emp_count NUMBER; v_dept_count NUMBER;
+    BEGIN
+        SELECT country_id INTO v_country_id FROM countries
+        WHERE UPPER(country_name) = UPPER(p_country_name);
+
+        SELECT COUNT(DISTINCT e.employee_id), COUNT(DISTINCT d.department_id)
+        INTO v_emp_count, v_dept_count
+        FROM departments d
+        LEFT JOIN employees e ON d.department_id = e.department_id
+        WHERE d.location_id IN (
+            SELECT location_id FROM locations WHERE country_id = v_country_id
+        );
+        RETURN t_country_stats(v_emp_count, v_dept_count);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20006, 'Kraj "' || p_country_name || '" nie istnieje.');
+    END;
+
+END pkg_funkcje;
+
